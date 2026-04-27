@@ -70,7 +70,7 @@ Formato de respuesta JSON:
 
 def llamar_gemini(caso_texto):
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         response = model.generate_content(
             PROMPT_CONTABLE + "\n\nCASO:\n" + caso_texto,
             generation_config=dict(temperature=0.1, max_output_tokens=4000)
