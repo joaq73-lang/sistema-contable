@@ -2,10 +2,109 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import os
-import json
+import json, re
 import zipfile
 import io
 from datetime import date, datetime
+
+# ── Gemini Chatbot Contable ──────────────────────────────────────────────────
+import google.generativeai as genai
+
+# Gemini API
+api_key = st.secrets["GEMINI_API_KEY"]
+
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+
+PROMPT_CONTABLE = """
+Eres un experto contador público. El usuario te dará un caso de empresa.
+Tu tarea es:
+1. Interpretar todas las operaciones contables del caso.
+2. Generar los asientos contables en partida doble usando SOLO estos códigos
+   de cuentas disponibles en el sistema:
+   10=Caja y Bancos, 12=Cuentas por Cobrar Comerciales,
+   16=Cuentas por Cobrar Diversas, 20=Mercaderias,
+   25=Materiales Auxiliares, 33=Inmuebles Maquinaria y Equipo,
+   34=Intangibles, 36=Desvalorizacion de Activos, 37=Activo Diferido,
+   39=Depreciacion Acumulada, 40=Tributos por Pagar,
+   41=Remuneraciones y Participaciones por Pagar,
+   42=Cuentas por Pagar Comerciales, 45=Obligaciones Financieras,
+   46=Cuentas por Pagar Diversas, 50=Capital Social,
+   57=Excedente de Revaluacion, 58=Reservas,
+   59=Resultados Acumulados, 60=Compras,
+   61=Variacion de Inventarios, 62=Gastos de Personal,
+   63=Gastos de Servicios, 65=Otros Gastos de Gestion,
+   66=Perdida por Medicion de Activos, 67=Gastos Financieros,
+   68=Valuacion y Deterioro de Activos, 69=Costo de Ventas,
+   70=Ventas, 74=Descuentos Concedidos,
+   75=Otros Ingresos de Gestion, 77=Ingresos Financieros.
+
+REGLAS ESTRICTAS:
+- Cada asiento debe cuadrar: suma DEBE == suma HABER.
+- Usa solo los códigos de la lista anterior.
+- Las fechas deben estar en formato YYYY-MM-DD.
+- Devuelve ÚNICAMENTE JSON válido, sin texto adicional, sin bloques markdown.
+
+Formato de respuesta JSON:
+{
+  "asientos": [
+    {
+      "fecha": "YYYY-MM-DD",
+      "glosa": "Descripción del asiento",
+      "lineas": [
+        {"cuenta": "10", "monto": 1000.00, "columna": "DEBE"},
+        {"cuenta": "50", "monto": 1000.00, "columna": "HABER"}
+      ]
+    }
+  ],
+  "analisis": {
+    "resumen_caso": "Descripción general del caso analizado",
+    "explicacion_diario": "Explicación didáctica del libro diario generado",
+    "explicacion_mayor": "Explicación del libro mayor y los saldos de cada cuenta",
+    "explicacion_balance": "Explicación del balance de comprobación y su cuadre",
+    "explicacion_resultados": "Explicación del estado de resultados, utilidad/pérdida",
+    "explicacion_situacion": "Explicación del estado de situación financiera, activos, pasivos y patrimonio",
+    "conclusion": "Conclusión financiera general del caso"
+  }
+}
+"""
+
+def llamar_gemini(caso_texto):
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(
+            PROMPT_CONTABLE + "\n\nCASO:\n" + caso_texto,
+            generation_config=dict(temperature=0.1, max_output_tokens=4000)
+        )
+        raw = response.text.strip()
+        # Limpiar bloques markdown si Gemini los añade
+        raw = re.sub(r'```json|```', '', raw).strip()
+        return json.loads(raw), None
+    except json.JSONDecodeError as e:
+        return None, f"Error al parsear JSON: {e}"
+    except Exception as e:
+        return None, f"Error al llamar a Gemini: {e}"
+
+def insertar_asientos_gemini(asientos):
+    """Inserta los asientos generados por Gemini en la base de datos."""
+    insertados, errores = 0, []
+    for a in asientos:
+        try:
+            lineas_validas = [l for l in a["lineas"] if l["monto"] > 0]
+            debe  = sum(l["monto"] for l in lineas_validas if l["columna"]=="DEBE")
+            haber = sum(l["monto"] for l in lineas_validas if l["columna"]=="HABER")
+            if round(debe - haber, 2) != 0:
+                errores.append(f"Asiento '{a['glosa']}' no cuadra (D:{debe} H:{haber})")
+                continue
+            num = proximo_numero()
+            aid = execute("INSERT INTO asientos (numero,fecha,glosa) VALUES (?,?,?)",
+                           (num, a["fecha"], a["glosa"]))
+            executemany("INSERT INTO lineas (asiento_id,cuenta,monto,columna) VALUES (?,?,?,?)",
+                        [(aid, l["cuenta"], l["monto"], l["columna"]) for l in lineas_validas])
+            insertados += 1
+        except Exception as e:
+            errores.append(f"Error en '{a.get('glosa','')}': {e}")
+    return insertados, errores
+
 
 # ── Configuración de página ──────────────────────────────────────────────────
 st.set_page_config(
@@ -621,6 +720,7 @@ with st.sidebar:
         "Balance de Comprobación",
         "Estado de Resultados",
         "Estado de Situación Financiera",
+        "🤖 Asistente Contable IA",
         "Plan de Cuentas",
     ])
     st.markdown("---")
@@ -1406,6 +1506,128 @@ elif pagina == "Estado de Situación Financiera":
             </div>
             """, unsafe_allow_html=True)
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ASISTENTE CONTABLE IA
+# ═══════════════════════════════════════════════════════════════════════════════
+elif pagina == "🤖 Asistente Contable IA":
+    st.title("🤖 Asistente Contable IA")
+    st.markdown("Describe el caso de empresa y Gemini generará todos los estados financieros automáticamente.")
+
+    caso = st.text_area(
+        "📋 Caso de empresa",
+        height=220,
+        placeholder="Ejemplo: La empresa 'Sol y Mar SAC' inicia operaciones el 01/01/2024 con un aporte de capital de S/ 50,000 en efectivo. El 05/01 compra mercadería por S/ 20,000 al crédito. El 15/01 vende mercadería por S/ 15,000 al contado con un costo de venta de S/ 8,000..."
+    )
+
+    col_btn1, col_btn2 = st.columns([2, 5])
+    with col_btn1:
+        analizar = st.button("✨ Analizar con Gemini", use_container_width=True)
+    with col_btn2:
+        if st.button("🗑 Limpiar asientos generados", use_container_width=True):
+            if "gemini_ids" in st.session_state:
+                for aid in st.session_state["gemini_ids"]:
+                    execute("DELETE FROM lineas WHERE asiento_id=?", (aid,))
+                    execute("DELETE FROM asientos WHERE id=?", (aid,))
+                del st.session_state["gemini_ids"]
+                st.success("Asientos eliminados.")
+                st.rerun()
+
+    if analizar:
+        if not caso.strip():
+            st.error("Por favor escribe un caso antes de analizar.")
+        else:
+            with st.spinner("🔍 Gemini está analizando el caso contable..."):
+                resultado, error = llamar_gemini(caso)
+
+            if error:
+                st.error(f"❌ {error}")
+            else:
+                # Insertar asientos y guardar IDs para poder limpiarlos
+                insertados, errores = insertar_asientos_gemini(resultado["asientos"])
+                ids_nuevos = query(
+                    f"SELECT id FROM asientos ORDER BY id DESC LIMIT {insertados}"
+                )["id"].tolist()
+                st.session_state["gemini_ids"] = ids_nuevos
+                st.session_state["gemini_analisis"] = resultado["analisis"]
+                st.session_state["gemini_caso"] = caso
+
+                if errores:
+                    for e in errores:
+                        st.warning(f"⚠️ {e}")
+
+                st.success(f"✅ {insertados} asientos generados e insertados correctamente.")
+                st.rerun()
+
+    # ── Mostrar resultados si ya se analizó ───────────────────────────────────
+    if "gemini_analisis" in st.session_state:
+        analisis = st.session_state["gemini_analisis"]
+
+        st.markdown("---")
+        st.markdown(f'<div class="alert-ok">📌 <b>Resumen:</b> {analisis["resumen_caso"]}</div>',
+                    unsafe_allow_html=True)
+
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📖 Libro Diario", "📊 Libro Mayor",
+            "⚖️ Bal. Comprobación", "📈 Estado Resultados",
+            "🏛️ Situación Financiera"
+        ])
+
+        fecha_ini_g = query("SELECT MIN(fecha) as f FROM asientos")["f"].iloc[0]
+        fecha_fin_g = query("SELECT MAX(fecha) as f FROM asientos")["f"].iloc[0]
+
+        # ── TAB 1: LIBRO DIARIO ───────────────────────────────────────────────────
+        with tab1:
+            st.markdown(f'<div class="card"><b>💡 Explicación:</b> {analisis["explicacion_diario"]}</div>',
+                        unsafe_allow_html=True)
+            df_d = query("""
+                SELECT a.numero, a.fecha, a.glosa, c.codigo, c.nombre, l.columna, l.monto
+                FROM asientos a JOIN lineas l ON l.asiento_id=a.id
+                JOIN cuentas c ON c.codigo=l.cuenta
+                ORDER BY a.numero, l.columna DESC
+            """)
+            if not df_d.empty:
+                for num_a in df_d["numero"].unique():
+                    g = df_d[df_d["numero"]==num_a]
+                    rows = ""
+                    td = th = 0
+                    for _, r in g.iterrows():
+                        d = m(r["monto"],SIM) if r["columna"]=="DEBE" else ""
+                        h = m(r["monto"],SIM) if r["columna"]=="HABER" else ""
+                        ind = "padding-left:2rem;" if r["columna"]=="HABER" else ""
+                        if r["columna"]=="DEBE": td+=r["monto"]
+                        else: th+=r["monto"]
+                        rows+=f'<tr><td style="{ind}padding:0.3rem 0.8rem">{r["codigo"]} - {r["nombre"]}</td><td style="text-align:right;padding:0.3rem 0.8rem;color:#2563eb">{d}</td><td style="text-align:right;padding:0.3rem 0.8rem;color:#7c3aed">{h}</td></tr>'
+                    st.markdown(f"""<div class="card"><b>Asiento N° {num_a:03d}</b> — {g['fecha'].iloc[0]} — <span style="opacity:0.6">{g['glosa'].iloc[0] or ''}</span>
+                    <table style="width:100%;border-collapse:collapse;font-size:0.88rem;margin-top:0.5rem">
+                    <thead><tr style="background:rgba(128,128,128,0.15)"><th style="text-align:left;padding:0.4rem 0.8rem">Cuenta</th><th style="text-align:right;padding:0.4rem 0.8rem">DEBE</th><th style="text-align:right;padding:0.4rem 0.8rem">HABER</th></tr></thead>
+                    <tbody>{rows}</tbody>
+                    <tfoot><tr style="background:#1a1f36;font-weight:700"><td style="padding:0.4rem 0.8rem;color:white">TOTAL</td><td style="text-align:right;padding:0.4rem 0.8rem;color:white">{m(td,SIM)}</td><td style="text-align:right;padding:0.4rem 0.8rem;color:white">{m(th,SIM)}</td></tr></tfoot>
+                    </table></div>""", unsafe_allow_html=True)
+
+        # ── TABS 2-5: redirigen a las páginas existentes con explicación ──────────
+        with tab2:
+            st.markdown(f'<div class="card"><b>💡 Explicación:</b> {analisis["explicacion_mayor"]}</div>',
+                        unsafe_allow_html=True)
+            st.info("📌 Ve a 'Libro Mayor' en el menú lateral para ver el detalle completo con filtros de fecha.")
+
+        with tab3:
+            st.markdown(f'<div class="card"><b>💡 Explicación:</b> {analisis["explicacion_balance"]}</div>',
+                        unsafe_allow_html=True)
+            st.info("📌 Ve a 'Balance de Comprobación' en el menú lateral para ver el detalle completo.")
+
+        with tab4:
+            st.markdown(f'<div class="card"><b>💡 Explicación:</b> {analisis["explicacion_resultados"]}</div>',
+                        unsafe_allow_html=True)
+            st.info("📌 Ve a 'Estado de Resultados' en el menú lateral para ver el detalle completo.")
+
+        with tab5:
+            st.markdown(f'<div class="card"><b>💡 Explicación:</b> {analisis["explicacion_situacion"]}</div>',
+                        unsafe_allow_html=True)
+            st.info("📌 Ve a 'Estado de Situación Financiera' en el menú lateral para ver el detalle completo.")
+
+        st.markdown("---")
+        st.markdown(f'<div class="alert-warn">🎯 <b>Conclusión:</b> {analisis["conclusion"]}</div>',
+                    unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PLAN DE CUENTAS
