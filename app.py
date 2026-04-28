@@ -289,6 +289,18 @@ def pantalla_bienvenida():
                             JOIN cuentas c ON c.codigo = l.cuenta
                             ORDER BY a.numero, l.columna DESC
                         """, conn_exp)
+
+                        # ── Totales Libro Diario ──────────────────────────
+                        if not df_diario.empty:
+                            total_debe  = df_diario.loc[df_diario["D/H"] == "DEBE",  "Monto"].sum()
+                            total_haber = df_diario.loc[df_diario["D/H"] == "HABER", "Monto"].sum()
+                            df_diario = pd.concat([df_diario, pd.DataFrame([{
+                                "N Asiento": "", "Fecha": "", "Glosa": "━━━ TOTALES ━━━",
+                                "Codigo": "", "Cuenta": "TOTAL DEBE",  "D/H": "DEBE",  "Monto": total_debe,
+                            }, {
+                                "N Asiento": "", "Fecha": "", "Glosa": "",
+                                "Codigo": "", "Cuenta": "TOTAL HABER", "D/H": "HABER", "Monto": total_haber,
+                            }])], ignore_index=True)
                     
 
                         # ── Libro Mayor ───────────────────────────────────
@@ -918,51 +930,57 @@ elif pagina == "Libro Diario":
     if df.empty:
         st.info("No hay asientos en el periodo seleccionado.")
     else:
+    else:
+        gran_debe = gran_haber = 0
+        rows_html = ""
         for num_asiento in df["numero"].unique():
             grupo   = df[df["numero"] == num_asiento]
             fecha_a = grupo["fecha"].iloc[0]
             glosa_a = grupo["glosa"].iloc[0] or ""
-
-            rows_html = ""
-            tot_debe = tot_haber = 0
+            # Fila separadora de asiento
+            rows_html += f"""
+            <tr style="background:rgba(79,70,229,0.12)">
+                <td colspan="4" style="padding:0.4rem 0.8rem; font-weight:700; font-size:0.85rem">
+                    Asiento N° {num_asiento:03d} &nbsp;·&nbsp; {fecha_a} &nbsp;·&nbsp;
+                    <span style="font-weight:400; opacity:0.7">{glosa_a}</span>
+                </td>
+            </tr>"""
             for _, row in grupo.iterrows():
-                d = m(row['monto'], SIM) if row["columna"] == "DEBE"  else ""
-                h = m(row['monto'], SIM) if row["columna"] == "HABER" else ""
-                indent = "" if row["columna"] == "DEBE" else "padding-left:2rem;"
-                if row["columna"] == "DEBE":  tot_debe  += row["monto"]
-                else:                          tot_haber += row["monto"]
+                indent = "" if row["columna"] == "DEBE" else "padding-left:2.5rem;"
+                debe  = m(row["monto"], SIM) if row["columna"] == "DEBE"  else ""
+                haber = m(row["monto"], SIM) if row["columna"] == "HABER" else ""
+                if row["columna"] == "DEBE":  gran_debe  += row["monto"]
+                else:                          gran_haber += row["monto"]
                 rows_html += f"""
-                <tr>
-                    <td style="{indent}padding:0.3rem 0.8rem">{row['codigo']} - {row['nombre']}</td>
-                    <td style="text-align:right; padding:0.3rem 0.8rem; color:#2563eb; font-weight:500">{d}</td>
-                    <td style="text-align:right; padding:0.3rem 0.8rem; color:#7c3aed; font-weight:500">{h}</td>
+                <tr style="border-bottom:1px solid rgba(128,128,128,0.1)">
+                    <td style="{indent}padding:0.3rem 0.8rem">{row['codigo']}</td>
+                    <td style="padding:0.3rem 0.8rem">{row['nombre']}</td>
+                    <td style="text-align:right; padding:0.3rem 0.8rem; color:#2563eb; font-weight:500">{debe}</td>
+                    <td style="text-align:right; padding:0.3rem 0.8rem; color:#7c3aed; font-weight:500">{haber}</td>
                 </tr>"""
 
-            st.markdown(f"""
-            <div class="card">
-            <div style="margin-bottom:0.5rem">
-                <b>Asiento N° {num_asiento:03d}</b> &nbsp;&nbsp; {fecha_a} &nbsp;&nbsp;
-                <span style="opacity:0.6">{glosa_a}</span>
-            </div>
-            <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
-                <thead>
-                    <tr style="background:rgba(128,128,128,0.15)">
-                        <th style="text-align:left; padding:0.4rem 0.8rem">Cuenta</th>
-                        <th style="text-align:right; padding:0.4rem 0.8rem; width:160px">DEBE</th>
-                        <th style="text-align:right; padding:0.4rem 0.8rem; width:160px">HABER</th>
-                    </tr>
-                </thead>
-                <tbody>{rows_html}</tbody>
-                <tfoot>
-                    <tr style="background:#1a1f36; font-weight:700">
-                        <td style="padding:0.4rem 0.8rem; color:white">TOTAL</td>
-                        <td style="text-align:right; padding:0.4rem 0.8rem; color:white">{m(tot_debe, SIM)}</td>
-                        <td style="text-align:right; padding:0.4rem 0.8rem; color:white">{m(tot_haber, SIM)}</td>
-                    </tr>
-                </tfoot>
-            </table>
-            </div>
-            """, unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="card">
+        <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+            <thead>
+                <tr style="background:rgba(128,128,128,0.15)">
+                    <th style="text-align:left; padding:0.4rem 0.8rem; width:80px">Código</th>
+                    <th style="text-align:left; padding:0.4rem 0.8rem">Cuenta</th>
+                    <th style="text-align:right; padding:0.4rem 0.8rem; width:150px">DEBE</th>
+                    <th style="text-align:right; padding:0.4rem 0.8rem; width:150px">HABER</th>
+                </tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+            <tfoot>
+                <tr style="background:#1a1f36; font-weight:700">
+                    <td colspan="2" style="padding:0.6rem 0.8rem; color:white">TOTALES</td>
+                    <td style="text-align:right; padding:0.6rem 0.8rem; color:#60a5fa">{m(gran_debe, SIM)}</td>
+                    <td style="text-align:right; padding:0.6rem 0.8rem; color:#a78bfa">{m(gran_haber, SIM)}</td>
+                </tr>
+            </tfoot>
+        </table>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
