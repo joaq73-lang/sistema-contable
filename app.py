@@ -1450,6 +1450,27 @@ elif pagina == "🤖 Asistente IA":
     st.title("🤖 Asistente Contable IA")
     st.markdown("Describe una operación para registrarla, o pregunta por tus estados financieros.")
 
+    st.markdown("### Accesos rápidos")
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    with col1:
+        if st.button("📒 Libro Diario"):
+            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Libro Diario completo"})
+    with col2:
+        if st.button("📘 Libro Mayor"):
+            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Libro Mayor con saldos por cuenta"})
+    with col3:
+        if st.button("⚖️ Bal. Comprobación"):
+            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Balance de Comprobación"})
+    with col4:
+        if st.button("📊 Est. Resultados"):
+            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Estado de Resultados detallado"})
+    with col5:
+        if st.button("🏦 Sit. Financiera"):
+            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Estado de Situación Financiera"})
+
+    st.markdown("---")
+
     # ── Obtener datos reales de la BD ─────────────────────────────────────────
     cuentas_df = query("SELECT codigo, nombre, tipo, naturaleza FROM cuentas ORDER BY codigo")
     cuentas_contexto = "\n".join(
