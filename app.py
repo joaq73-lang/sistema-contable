@@ -1448,176 +1448,64 @@ elif pagina == "🤖 Asistente IA":
     from groq import Groq
 
     st.title("🤖 Asistente Contable IA")
-    st.markdown("Describe una operación para registrarla, o usa los accesos rápidos para ver tus estados financieros.")
+    st.markdown("Describe una operación en lenguaje natural y el asistente creará el asiento contable automáticamente.")
 
-    # ── Datos reales de la BD ─────────────────────────────────────────────────
+    # Obtener cuentas disponibles para pasarlas al contexto
     cuentas_df = query("SELECT codigo, nombre, tipo, naturaleza FROM cuentas ORDER BY codigo")
     cuentas_contexto = "\n".join(
         f"{r.codigo} - {r.nombre} ({r.tipo}, {r.naturaleza})"
         for _, r in cuentas_df.iterrows()
     )
 
-    df_diario = query("""
-        SELECT a.numero, a.fecha, a.glosa, c.codigo, c.nombre, l.columna, l.monto
-        FROM asientos a
-        JOIN lineas l ON l.asiento_id = a.id
-        JOIN cuentas c ON c.codigo = l.cuenta
-        ORDER BY a.numero, l.columna DESC
-    """)
-
-    df_mayor = query("""
-        SELECT c.codigo, c.nombre, c.tipo, c.naturaleza,
-               SUM(CASE WHEN l.columna='DEBE'  THEN l.monto ELSE 0 END) as suma_debe,
-               SUM(CASE WHEN l.columna='HABER' THEN l.monto ELSE 0 END) as suma_haber
-        FROM cuentas c
-        JOIN lineas l ON l.cuenta = c.codigo
-        JOIN asientos a ON a.id = l.asiento_id
-        GROUP BY c.codigo, c.nombre, c.tipo, c.naturaleza
-        ORDER BY c.codigo
-    """)
-
-    if not df_mayor.empty:
-        def calc_saldo_mayor(row):
-            if row["naturaleza"] == "DEUDORA":
-                return row["suma_debe"] - row["suma_haber"]
-            else:
-                return row["suma_haber"] - row["suma_debe"]
-        df_mayor["saldo"] = df_mayor.apply(calc_saldo_mayor, axis=1)
-
-    df_er  = df_mayor[df_mayor["tipo"].isin(["INGRESO","GASTO"])]     if not df_mayor.empty else pd.DataFrame()
-    df_esf = df_mayor[df_mayor["tipo"].isin(["ACTIVO","PASIVO","PATRIMONIO"])] if not df_mayor.empty else pd.DataFrame()
-
-    total_ingresos = df_er[df_er["tipo"]=="INGRESO"]["saldo"].sum() if not df_er.empty else 0
-    total_gastos   = df_er[df_er["tipo"]=="GASTO"]["saldo"].sum()   if not df_er.empty else 0
-    utilidad_neta  = total_ingresos - total_gastos
-    total_activo   = df_esf[df_esf["tipo"]=="ACTIVO"]["saldo"].sum()     if not df_esf.empty else 0
-    total_pasivo   = df_esf[df_esf["tipo"]=="PASIVO"]["saldo"].sum()     if not df_esf.empty else 0
-    total_patrim   = df_esf[df_esf["tipo"]=="PATRIMONIO"]["saldo"].sum() if not df_esf.empty else 0
-    total_patrim  += utilidad_neta
-
-    # ── Textos para el contexto del LLM ──────────────────────────────────────
-    if not df_diario.empty:
-        diario_texto = ""
-        for num in df_diario["numero"].unique():
-            grupo = df_diario[df_diario["numero"] == num]
-            diario_texto += f"\nAsiento N°{num:03d} | {grupo['fecha'].iloc[0]} | {grupo['glosa'].iloc[0] or ''}\n"
-            for _, r in grupo.iterrows():
-                diario_texto += f"  {r['codigo']} - {r['nombre']} | {r['columna']} | {r['monto']:.2f}\n"
-    else:
-        diario_texto = "Sin asientos registrados."
-
-    if not df_mayor.empty:
-        mayor_texto = ""
-        for _, r in df_mayor.iterrows():
-            mayor_texto += f"{r['codigo']} - {r['nombre']} ({r['tipo']}) | DEBE: {r['suma_debe']:.2f} | HABER: {r['suma_haber']:.2f} | Saldo: {r['saldo']:.2f} ({r['naturaleza']})\n"
-    else:
-        mayor_texto = "Sin movimientos."
-
-    if not df_er.empty:
-        er_texto = ""
-        for _, r in df_er.iterrows():
-            er_texto += f"{r['tipo']} | {r['codigo']} - {r['nombre']} | Saldo: {r['saldo']:.2f}\n"
-        er_texto += f"\nTOTAL INGRESOS: {total_ingresos:.2f}\nTOTAL GASTOS: {total_gastos:.2f}\nUTILIDAD NETA: {utilidad_neta:.2f}"
-    else:
-        er_texto = "Sin movimientos de ingresos/gastos."
-
-    if not df_esf.empty:
-        esf_texto = ""
-        for _, r in df_esf.iterrows():
-            esf_texto += f"{r['tipo']} | {r['codigo']} - {r['nombre']} | Saldo: {r['saldo']:.2f}\n"
-        esf_texto += f"\nTOTAL ACTIVO: {total_activo:.2f}\nTOTAL PASIVO: {total_pasivo:.2f}\nTOTAL PATRIMONIO: {total_patrim:.2f}"
-    else:
-        esf_texto = "Sin movimientos de activo/pasivo/patrimonio."
-
     SYSTEM_PROMPT = f"""Eres un asistente contable experto en el Plan Contable General Empresarial (PCGE) de Perú.
-Tienes acceso a los datos reales de la empresa "{empresa_actual}" con moneda {SIM}.
+El usuario te describirá operaciones en lenguaje natural y tú debes:
+1. Interpretar la operación
+2. Generar el asiento contable correspondiente SOLO usando las cuentas disponibles
+3. Devolver ÚNICAMENTE un JSON con este formato exacto, sin texto adicional:
 
-━━━ LIBRO DIARIO ━━━
-{diario_texto}
+{{
+  "glosa": "descripción breve del asiento",
+  "lineas": [
+    {{"cuenta": "10", "monto": 1000.00, "columna": "DEBE"}},
+    {{"cuenta": "70", "monto": 1000.00, "columna": "HABER"}}
+  ],
+  "explicacion": "explicación breve de por qué se usa cada cuenta"
+}}
 
-━━━ LIBRO MAYOR (saldos) ━━━
-{mayor_texto}
-
-━━━ ESTADO DE RESULTADOS ━━━
-{er_texto}
-
-━━━ ESTADO DE SITUACIÓN FINANCIERA ━━━
-{esf_texto}
-
-━━━ CUENTAS DISPONIBLES ━━━
+Cuentas disponibles en esta empresa:
 {cuentas_contexto}
 
-━━━ TUS CAPACIDADES ━━━
-Puedes hacer DOS cosas:
-
-1. CONSULTAS: Si el usuario pregunta por sus estados financieros o pide ver el libro diario, mayor, balance de comprobación, estado de resultados o estado de situación financiera, responde usando los datos reales de arriba. Muestra tablas en markdown bien formateadas con todos los registros completos, sin omitir ninguno.
-
-2. REGISTRO DE ASIENTOS: Si el usuario describe una operación contable (puede ser un texto largo con varias operaciones), interpreta CADA operación y genera UN JSON por cada asiento. Devuelve ÚNICAMENTE la lista JSON, sin ningún texto antes ni después, sin explicaciones fuera del JSON, sin notas al pie. Solo el JSON puro:
-[
-  {{
-    "glosa": "descripción breve",
-    "lineas": [
-      {{"cuenta": "10", "monto": 1000.00, "columna": "DEBE"}},
-      {{"cuenta": "70", "monto": 1000.00, "columna": "HABER"}}
-    ],
-    "explicacion": "por qué se usa cada cuenta"
-  }}
-]
-
-Reglas para asientos:
-- DEBE siempre igual a HABER en cada asiento
-- Solo usar cuentas de la lista disponible
-- Montos positivos
-- Si no hay monto claro, usar 0 y avisar en la explicación
-
-Responde siempre en español. Si no queda claro si es consulta o registro, pregunta al usuario.
+Reglas:
+- El total DEBE siempre debe ser igual al total HABER
+- Solo usa cuentas de la lista anterior
+- Los montos deben ser números positivos
+- Si el usuario no menciona montos exactos, usa 0 y avísalo en la explicación
+- Si la operación no es clara, pide aclaración en lugar de generar el JSON
 """
 
-    # ── Historial ─────────────────────────────────────────────────────────────
+    # Inicializar historial
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    for idx, msg in enumerate(st.session_state.chat_history):
+    # Mostrar historial
+    for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
-            if "asientos_json" in msg:
-                for i, asiento in enumerate(msg["asientos_json"]):
-                    total_debe  = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "DEBE")
-                    total_haber = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "HABER")
-                    cuadra = round(total_debe - total_haber, 2) == 0
-                    st.markdown(f"**Asiento {i+1}: {asiento['glosa']}**")
-                    # ... tu HTML de tabla aquí igual que antes ...
-                    if cuadra and total_debe > 0:
-                        btn_key = f"reg_hist_{idx}_{i}"
-                        if st.button(f"✅ Registrar asiento {i+1}", key=btn_key):
-                            num_nuevo = proximo_numero()
-                            asiento_id = execute(
-                                "INSERT INTO asientos (numero, fecha, glosa) VALUES (?,?,?)",
-                                (num_nuevo, date.today().strftime("%Y-%m-%d"), asiento["glosa"])
-                            )
-                            data_lineas = [
-                                (asiento_id, l["cuenta"], l["monto"], l["columna"])
-                                for l in asiento["lineas"] if l["monto"] > 0
-                            ]
-                            executemany(
-                                "INSERT INTO lineas (asiento_id, cuenta, monto, columna) VALUES (?,?,?,?)",
-                                data_lineas
-                            )
-                            st.success(f"✅ Asiento N° {num_nuevo:03d} registrado.")
-            else:
-                st.markdown(msg["content"])
+            st.markdown(msg["content"])
 
-    # ── Input ─────────────────────────────────────────────────────────────────
-    user_input = st.chat_input("Ej: El 01/01 vendimos mercadería por S/5000 al contado y compramos útiles por S/200...")
+    # Input del usuario
+    user_input = st.chat_input("Ej: Vendemos mercadería por S/ 5000 al contado...")
 
     if user_input:
+        # Mostrar mensaje del usuario
         st.session_state.chat_history.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.markdown(user_input)
 
+        # Llamar a Groq
         try:
             api_key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
             if not api_key:
-                st.error("❌ No se encontró GROQ_API_KEY.")
+                st.error("❌ No se encontró GROQ_API_KEY. Configúrala en los secrets de Streamlit.")
                 st.stop()
 
             client = Groq(api_key=api_key)
@@ -1626,109 +1514,98 @@ Responde siempre en español. Si no queda claro si es consulta o registro, pregu
             for msg in st.session_state.chat_history:
                 messages_groq.append({"role": msg["role"], "content": msg["content"]})
 
-            with st.spinner("Analizando..."):
+            with st.spinner("Analizando operación..."):
                 response = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=messages_groq,
                     temperature=0.1,
-                    max_tokens=4000,
+                    max_tokens=1000,
                 )
 
             respuesta_raw = response.choices[0].message.content.strip()
 
-            # Intentar parsear como JSON (lista de asientos)
+            # Intentar parsear como JSON
             try:
+                # Limpiar posibles ```json ... ```
                 respuesta_limpia = respuesta_raw
                 if "```" in respuesta_limpia:
                     respuesta_limpia = respuesta_limpia.split("```")[1]
                     if respuesta_limpia.startswith("json"):
                         respuesta_limpia = respuesta_limpia[4:]
-                else:
-                    # Extraer solo la parte JSON aunque haya texto alrededor
-                    inicio = respuesta_limpia.find("[")
-                    if inicio == -1:
-                        inicio = respuesta_limpia.find("{")
-                    fin = respuesta_limpia.rfind("]")
-                    if fin == -1:
-                        fin = respuesta_limpia.rfind("}")
-                    if inicio != -1 and fin != -1:
-                        respuesta_limpia = respuesta_limpia[inicio:fin+1]
 
                 datos = json.loads(respuesta_limpia)
 
-                # Normalizar: si viene un dict solo, convertir a lista
-                if isinstance(datos, dict):
-                    datos = [datos]
+                # Validar que cuadra
+                total_debe  = sum(l["monto"] for l in datos["lineas"] if l["columna"] == "DEBE")
+                total_haber = sum(l["monto"] for l in datos["lineas"] if l["columna"] == "HABER")
+                cuadra = round(total_debe - total_haber, 2) == 0
 
+                # Mostrar respuesta del asistente
                 with st.chat_message("assistant"):
-                    for i, asiento in enumerate(datos):
-                        total_debe  = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "DEBE")
-                        total_haber = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "HABER")
-                        cuadra = round(total_debe - total_haber, 2) == 0
+                    st.markdown(f"**Asiento sugerido:** {datos['glosa']}")
+                    st.markdown(f"_{datos['explicacion']}_")
 
-                        st.markdown(f"**Asiento {i+1}: {asiento['glosa']}**")
-                        st.markdown(f"_{asiento['explicacion']}_")
+                    # Tabla del asiento
+                    filas = ""
+                    for linea in datos["lineas"]:
+                        cuenta_info = cuentas_df[cuentas_df["codigo"] == linea["cuenta"]]
+                        nombre_cta  = cuenta_info["nombre"].iloc[0] if not cuenta_info.empty else "?"
+                        d = m(linea["monto"], SIM) if linea["columna"] == "DEBE"  else ""
+                        h = m(linea["monto"], SIM) if linea["columna"] == "HABER" else ""
+                        filas += f"""<tr style="border-bottom:1px solid rgba(128,128,128,0.15)">
+                            <td style="padding:0.4rem 0.8rem">{linea['cuenta']} - {nombre_cta}</td>
+                            <td style="text-align:right; padding:0.4rem 0.8rem; color:#2563eb; font-weight:500">{d}</td>
+                            <td style="text-align:right; padding:0.4rem 0.8rem; color:#7c3aed; font-weight:500">{h}</td>
+                        </tr>"""
 
-                        filas = ""
-                        for linea in asiento["lineas"]:
-                            cuenta_info = cuentas_df[cuentas_df["codigo"] == linea["cuenta"]]
-                            nombre_cta  = cuenta_info["nombre"].iloc[0] if not cuenta_info.empty else "?"
-                            d = m(linea["monto"], SIM) if linea["columna"] == "DEBE"  else ""
-                            h = m(linea["monto"], SIM) if linea["columna"] == "HABER" else ""
-                            filas += f"""<tr style="border-bottom:1px solid rgba(128,128,128,0.15)">
-                                <td style="padding:0.4rem 0.8rem">{linea['cuenta']} - {nombre_cta}</td>
-                                <td style="text-align:right;padding:0.4rem 0.8rem;color:#2563eb;font-weight:500">{d}</td>
-                                <td style="text-align:right;padding:0.4rem 0.8rem;color:#7c3aed;font-weight:500">{h}</td>
-                            </tr>"""
+                    estado_color = "#d1fae5" if cuadra else "#fee2e2"
+                    estado_texto = "✅ El asiento cuadra" if cuadra else "⚠️ El asiento NO cuadra"
 
-                        estado_color = "#d1fae5" if cuadra else "#fee2e2"
-                        estado_texto = "✅ Cuadra" if cuadra else "⚠️ No cuadra"
+                    st.markdown(f"""
+                    <div class="card">
+                    <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+                        <thead>
+                            <tr style="background:rgba(128,128,128,0.15)">
+                                <th style="text-align:left; padding:0.4rem 0.8rem">Cuenta</th>
+                                <th style="text-align:right; padding:0.4rem 0.8rem">DEBE</th>
+                                <th style="text-align:right; padding:0.4rem 0.8rem">HABER</th>
+                            </tr>
+                        </thead>
+                        <tbody>{filas}</tbody>
+                        <tfoot>
+                            <tr style="background:#1a1f36; font-weight:700">
+                                <td style="padding:0.4rem 0.8rem; color:white">TOTAL</td>
+                                <td style="text-align:right; padding:0.4rem 0.8rem; color:white">{m(total_debe, SIM)}</td>
+                                <td style="text-align:right; padding:0.4rem 0.8rem; color:white">{m(total_haber, SIM)}</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                    </div>
+                    <div style="background:{estado_color}; padding:0.5rem 1rem; border-radius:6px; margin-top:0.5rem">{estado_texto}</div>
+                    """, unsafe_allow_html=True)
 
-                        st.markdown(f"""
-                        <div class="card">
-                        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
-                            <thead>
-                                <tr style="background:rgba(128,128,128,0.15)">
-                                    <th style="text-align:left;padding:0.4rem 0.8rem">Cuenta</th>
-                                    <th style="text-align:right;padding:0.4rem 0.8rem">DEBE</th>
-                                    <th style="text-align:right;padding:0.4rem 0.8rem">HABER</th>
-                                </tr>
-                            </thead>
-                            <tbody>{filas}</tbody>
-                            <tfoot>
-                                <tr style="background:#1a1f36;font-weight:700">
-                                    <td style="padding:0.4rem 0.8rem;color:white">TOTAL</td>
-                                    <td style="text-align:right;padding:0.4rem 0.8rem;color:white">{m(total_debe, SIM)}</td>
-                                    <td style="text-align:right;padding:0.4rem 0.8rem;color:white">{m(total_haber, SIM)}</td>
-                                </tr>
-                            </tfoot>
-                        </table>
-                        </div>
-                        <div style="background:{estado_color};padding:0.5rem 1rem;border-radius:6px;margin-top:0.5rem;margin-bottom:1rem">{estado_texto}</div>
-                        """, unsafe_allow_html=True)
-
-                        if cuadra and total_debe > 0:
-                            if st.button(f"✅ Registrar asiento {i+1}", key=f"reg_{len(st.session_state.chat_history)}_{i}"):
-                                num_nuevo = proximo_numero()
-                                asiento_id = execute(
-                                    "INSERT INTO asientos (numero, fecha, glosa) VALUES (?,?,?)",
-                                    (num_nuevo, date.today().strftime("%Y-%m-%d"), asiento["glosa"])
-                                )
-                                data_lineas = [
-                                    (asiento_id, l["cuenta"], l["monto"], l["columna"])
-                                    for l in asiento["lineas"] if l["monto"] > 0
-                                ]
-                                executemany("INSERT INTO lineas (asiento_id, cuenta, monto, columna) VALUES (?,?,?,?)", data_lineas)
-                                st.success(f"✅ Asiento N° {num_nuevo:03d} registrado.")
+                    # Botón para registrar directamente
+                    if cuadra and total_debe > 0:
+                        if st.button("✅ Registrar este asiento", key=f"registrar_{len(st.session_state.chat_history)}"):
+                            num_nuevo = proximo_numero()
+                            asiento_id = execute(
+                                "INSERT INTO asientos (numero, fecha, glosa) VALUES (?,?,?)",
+                                (num_nuevo, date.today().strftime("%Y-%m-%d"), datos["glosa"])
+                            )
+                            data_lineas = [
+                                (asiento_id, l["cuenta"], l["monto"], l["columna"])
+                                for l in datos["lineas"] if l["monto"] > 0
+                            ]
+                            executemany("INSERT INTO lineas (asiento_id, cuenta, monto, columna) VALUES (?,?,?,?)", data_lineas)
+                            st.success(f"✅ Asiento N° {num_nuevo:03d} registrado correctamente.")
 
                 st.session_state.chat_history.append({
                     "role": "assistant",
-                    "content": f"Asientos generados: {' / '.join(a['glosa'] for a in datos)}",
-                    "asientos_json": datos  # <-- guardar el JSON completo
+                    "content": f"**{datos['glosa']}**\n\n{datos['explicacion']}"
                 })
 
-            except (json.JSONDecodeError, KeyError):
-                # Respuesta de texto (consulta de estados financieros)
+            except json.JSONDecodeError:
+                # El modelo respondió con texto normal (pidiendo aclaración, etc.)
                 with st.chat_message("assistant"):
                     st.markdown(respuesta_raw)
                 st.session_state.chat_history.append({"role": "assistant", "content": respuesta_raw})
@@ -1736,6 +1613,7 @@ Responde siempre en español. Si no queda claro si es consulta o registro, pregu
         except Exception as e:
             st.error(f"Error al conectar con Groq: {e}")
 
+    # Limpiar conversación
     if st.session_state.chat_history:
         if st.button("🗑 Limpiar conversación"):
             st.session_state.chat_history = []
