@@ -1448,37 +1448,15 @@ elif pagina == "🤖 Asistente IA":
     from groq import Groq
 
     st.title("🤖 Asistente Contable IA")
-    st.markdown("Describe una operación para registrarla, o pregunta por tus estados financieros.")
+    st.markdown("Describe una operación para registrarla, o usa los accesos rápidos para ver tus estados financieros.")
 
-    st.markdown("### Accesos rápidos")
-    col1, col2, col3, col4, col5 = st.columns(5)
-
-    with col1:
-        if st.button("📒 Libro Diario"):
-            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Libro Diario completo"})
-    with col2:
-        if st.button("📘 Libro Mayor"):
-            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Libro Mayor con saldos por cuenta"})
-    with col3:
-        if st.button("⚖️ Bal. Comprobación"):
-            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Balance de Comprobación"})
-    with col4:
-        if st.button("📊 Est. Resultados"):
-            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Estado de Resultados detallado"})
-    with col5:
-        if st.button("🏦 Sit. Financiera"):
-            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Estado de Situación Financiera"})
-
-    st.markdown("---")
-
-    # ── Obtener datos reales de la BD ─────────────────────────────────────────
+    # ── Datos reales de la BD ─────────────────────────────────────────────────
     cuentas_df = query("SELECT codigo, nombre, tipo, naturaleza FROM cuentas ORDER BY codigo")
     cuentas_contexto = "\n".join(
         f"{r.codigo} - {r.nombre} ({r.tipo}, {r.naturaleza})"
         for _, r in cuentas_df.iterrows()
     )
 
-    # Libro Diario
     df_diario = query("""
         SELECT a.numero, a.fecha, a.glosa, c.codigo, c.nombre, l.columna, l.monto
         FROM asientos a
@@ -1487,7 +1465,6 @@ elif pagina == "🤖 Asistente IA":
         ORDER BY a.numero, l.columna DESC
     """)
 
-    # Libro Mayor (saldos por cuenta)
     df_mayor = query("""
         SELECT c.codigo, c.nombre, c.tipo, c.naturaleza,
                SUM(CASE WHEN l.columna='DEBE'  THEN l.monto ELSE 0 END) as suma_debe,
@@ -1499,60 +1476,53 @@ elif pagina == "🤖 Asistente IA":
         ORDER BY c.codigo
     """)
 
-    # Calcular saldo por naturaleza
-    def calc_saldo_mayor(row):
-        if row["naturaleza"] == "DEUDORA":
-            return row["suma_debe"] - row["suma_haber"]
-        else:
-            return row["suma_haber"] - row["suma_debe"]
-
     if not df_mayor.empty:
+        def calc_saldo_mayor(row):
+            if row["naturaleza"] == "DEUDORA":
+                return row["suma_debe"] - row["suma_haber"]
+            else:
+                return row["suma_haber"] - row["suma_debe"]
         df_mayor["saldo"] = df_mayor.apply(calc_saldo_mayor, axis=1)
 
-    # Estado de Resultados
-    df_er = df_mayor[df_mayor["tipo"].isin(["INGRESO", "GASTO"])] if not df_mayor.empty else pd.DataFrame()
-    total_ingresos = df_er[df_er["tipo"] == "INGRESO"]["saldo"].sum() if not df_er.empty else 0
-    total_gastos   = df_er[df_er["tipo"] == "GASTO"]["saldo"].sum()  if not df_er.empty else 0
+    df_er  = df_mayor[df_mayor["tipo"].isin(["INGRESO","GASTO"])]     if not df_mayor.empty else pd.DataFrame()
+    df_esf = df_mayor[df_mayor["tipo"].isin(["ACTIVO","PASIVO","PATRIMONIO"])] if not df_mayor.empty else pd.DataFrame()
+
+    total_ingresos = df_er[df_er["tipo"]=="INGRESO"]["saldo"].sum() if not df_er.empty else 0
+    total_gastos   = df_er[df_er["tipo"]=="GASTO"]["saldo"].sum()   if not df_er.empty else 0
     utilidad_neta  = total_ingresos - total_gastos
+    total_activo   = df_esf[df_esf["tipo"]=="ACTIVO"]["saldo"].sum()     if not df_esf.empty else 0
+    total_pasivo   = df_esf[df_esf["tipo"]=="PASIVO"]["saldo"].sum()     if not df_esf.empty else 0
+    total_patrim   = df_esf[df_esf["tipo"]=="PATRIMONIO"]["saldo"].sum() if not df_esf.empty else 0
+    total_patrim  += utilidad_neta
 
-    # Estado de Situación Financiera
-    df_esf = df_mayor[df_mayor["tipo"].isin(["ACTIVO", "PASIVO", "PATRIMONIO"])] if not df_mayor.empty else pd.DataFrame()
-    total_activo   = df_esf[df_esf["tipo"] == "ACTIVO"]["saldo"].sum()     if not df_esf.empty else 0
-    total_pasivo   = df_esf[df_esf["tipo"] == "PASIVO"]["saldo"].sum()     if not df_esf.empty else 0
-    total_patrim   = df_esf[df_esf["tipo"] == "PATRIMONIO"]["saldo"].sum() if not df_esf.empty else 0
-    total_patrim  += utilidad_neta  # incluir resultado del ejercicio
+    # ── Textos para el contexto del LLM ──────────────────────────────────────
+    if not df_diario.empty:
+        diario_texto = ""
+        for num in df_diario["numero"].unique():
+            grupo = df_diario[df_diario["numero"] == num]
+            diario_texto += f"\nAsiento N°{num:03d} | {grupo['fecha'].iloc[0]} | {grupo['glosa'].iloc[0] or ''}\n"
+            for _, r in grupo.iterrows():
+                diario_texto += f"  {r['codigo']} - {r['nombre']} | {r['columna']} | {r['monto']:.2f}\n"
+    else:
+        diario_texto = "Sin asientos registrados."
 
-    # Balance de Comprobación
-    df_balance = df_mayor.copy() if not df_mayor.empty else pd.DataFrame()
-
-    # ── Construir contexto financiero para el LLM ─────────────────────────────
-    def df_to_text(df, cols):
-        if df.empty:
-            return "Sin datos."
-        lines = []
-        for _, r in df.iterrows():
-            lines.append(" | ".join(str(r[c]) for c in cols))
-        return "\n".join(lines)
-
-    diario_texto = df_to_text(df_diario, ["numero", "fecha", "glosa", "codigo", "nombre", "columna", "monto"]) if not df_diario.empty else "Sin asientos."
-
-    mayor_texto = ""
     if not df_mayor.empty:
+        mayor_texto = ""
         for _, r in df_mayor.iterrows():
-            mayor_texto += f"{r['codigo']} - {r['nombre']} | DEBE: {r['suma_debe']:.2f} | HABER: {r['suma_haber']:.2f} | Saldo: {r['saldo']:.2f} ({r['naturaleza']})\n"
+            mayor_texto += f"{r['codigo']} - {r['nombre']} ({r['tipo']}) | DEBE: {r['suma_debe']:.2f} | HABER: {r['suma_haber']:.2f} | Saldo: {r['saldo']:.2f} ({r['naturaleza']})\n"
     else:
         mayor_texto = "Sin movimientos."
 
-    er_texto = ""
     if not df_er.empty:
+        er_texto = ""
         for _, r in df_er.iterrows():
             er_texto += f"{r['tipo']} | {r['codigo']} - {r['nombre']} | Saldo: {r['saldo']:.2f}\n"
         er_texto += f"\nTOTAL INGRESOS: {total_ingresos:.2f}\nTOTAL GASTOS: {total_gastos:.2f}\nUTILIDAD NETA: {utilidad_neta:.2f}"
     else:
         er_texto = "Sin movimientos de ingresos/gastos."
 
-    esf_texto = ""
     if not df_esf.empty:
+        esf_texto = ""
         for _, r in df_esf.iterrows():
             esf_texto += f"{r['tipo']} | {r['codigo']} - {r['nombre']} | Saldo: {r['saldo']:.2f}\n"
         esf_texto += f"\nTOTAL ACTIVO: {total_activo:.2f}\nTOTAL PASIVO: {total_pasivo:.2f}\nTOTAL PATRIMONIO: {total_patrim:.2f}"
@@ -1563,7 +1533,6 @@ elif pagina == "🤖 Asistente IA":
 Tienes acceso a los datos reales de la empresa "{empresa_actual}" con moneda {SIM}.
 
 ━━━ LIBRO DIARIO ━━━
-N°Asiento | Fecha | Glosa | Código | Cuenta | D/H | Monto
 {diario_texto}
 
 ━━━ LIBRO MAYOR (saldos) ━━━
@@ -1581,36 +1550,66 @@ N°Asiento | Fecha | Glosa | Código | Cuenta | D/H | Monto
 ━━━ TUS CAPACIDADES ━━━
 Puedes hacer DOS cosas:
 
-1. CONSULTAS: Si el usuario pregunta por sus estados financieros, analiza los datos anteriores y responde con claridad. Puedes mostrar tablas en markdown, calcular ratios, explicar resultados, comparar cuentas, etc.
+1. CONSULTAS: Si el usuario pregunta por sus estados financieros o pide ver el libro diario, mayor, balance de comprobación, estado de resultados o estado de situación financiera, responde usando los datos reales de arriba. Muestra tablas en markdown bien formateadas con todos los registros completos, sin omitir ninguno.
 
-2. REGISTRO DE ASIENTOS: Si el usuario describe una operación, genera un JSON con este formato exacto (sin texto adicional antes ni después):
-{{
-  "glosa": "descripción breve",
-  "lineas": [
-    {{"cuenta": "10", "monto": 1000.00, "columna": "DEBE"}},
-    {{"cuenta": "70", "monto": 1000.00, "columna": "HABER"}}
-  ],
-  "explicacion": "por qué se usa cada cuenta"
-}}
+2. REGISTRO DE ASIENTOS: Si el usuario describe una operación contable (puede ser un texto largo con varias operaciones), interpreta CADA operación y genera UN JSON por cada asiento. Devuelve una lista JSON así:
+[
+  {{
+    "glosa": "descripción breve",
+    "lineas": [
+      {{"cuenta": "10", "monto": 1000.00, "columna": "DEBE"}},
+      {{"cuenta": "70", "monto": 1000.00, "columna": "HABER"}}
+    ],
+    "explicacion": "por qué se usa cada cuenta"
+  }}
+]
 
 Reglas para asientos:
-- DEBE siempre igual a HABER
+- DEBE siempre igual a HABER en cada asiento
 - Solo usar cuentas de la lista disponible
 - Montos positivos
-- Si no hay monto claro, usar 0 y avisar
+- Si no hay monto claro, usar 0 y avisar en la explicación
 
 Responde siempre en español. Si no queda claro si es consulta o registro, pregunta al usuario.
 """
 
-    # ── Interfaz del chat ─────────────────────────────────────────────────────
+    # ── Botones rápidos ───────────────────────────────────────────────────────
+    st.markdown("### Accesos rápidos")
+    col1, col2, col3, col4, col5 = st.columns(5)
+
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
+    with col1:
+        if st.button("📒 Libro Diario"):
+            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Libro Diario completo con todos los asientos"})
+            st.rerun()
+    with col2:
+        if st.button("📘 Libro Mayor"):
+            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Libro Mayor completo con saldos por cuenta"})
+            st.rerun()
+    with col3:
+        if st.button("⚖️ Bal. Comprobación"):
+            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Balance de Comprobación completo"})
+            st.rerun()
+    with col4:
+        if st.button("📊 Est. Resultados"):
+            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Estado de Resultados detallado"})
+            st.rerun()
+    with col5:
+        if st.button("🏦 Sit. Financiera"):
+            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Estado de Situación Financiera completo"})
+            st.rerun()
+
+    st.markdown("---")
+
+    # ── Historial ─────────────────────────────────────────────────────────────
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    user_input = st.chat_input("Ej: ¿Cuál es mi utilidad neta? / Vendemos mercadería por S/ 5000 al contado...")
+    # ── Input ─────────────────────────────────────────────────────────────────
+    user_input = st.chat_input("Ej: El 01/01 vendimos mercadería por S/5000 al contado y compramos útiles por S/200...")
 
     if user_input:
         st.session_state.chat_history.append({"role": "user", "content": user_input})
@@ -1634,12 +1633,12 @@ Responde siempre en español. Si no queda claro si es consulta o registro, pregu
                     model="llama-3.3-70b-versatile",
                     messages=messages_groq,
                     temperature=0.1,
-                    max_tokens=2000,
+                    max_tokens=4000,
                 )
 
             respuesta_raw = response.choices[0].message.content.strip()
 
-            # Intentar parsear como JSON (= quiere registrar asiento)
+            # Intentar parsear como JSON (lista de asientos)
             try:
                 respuesta_limpia = respuesta_raw
                 if "```" in respuesta_limpia:
@@ -1649,74 +1648,76 @@ Responde siempre en español. Si no queda claro si es consulta o registro, pregu
 
                 datos = json.loads(respuesta_limpia)
 
-                # Es un asiento — mostrar tabla
-                total_debe  = sum(l["monto"] for l in datos["lineas"] if l["columna"] == "DEBE")
-                total_haber = sum(l["monto"] for l in datos["lineas"] if l["columna"] == "HABER")
-                cuadra = round(total_debe - total_haber, 2) == 0
+                # Normalizar: si viene un dict solo, convertir a lista
+                if isinstance(datos, dict):
+                    datos = [datos]
 
                 with st.chat_message("assistant"):
-                    st.markdown(f"**Asiento sugerido:** {datos['glosa']}")
-                    st.markdown(f"_{datos['explicacion']}_")
+                    for i, asiento in enumerate(datos):
+                        total_debe  = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "DEBE")
+                        total_haber = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "HABER")
+                        cuadra = round(total_debe - total_haber, 2) == 0
 
-                    filas = ""
-                    for linea in datos["lineas"]:
-                        cuenta_info = cuentas_df[cuentas_df["codigo"] == linea["cuenta"]]
-                        nombre_cta  = cuenta_info["nombre"].iloc[0] if not cuenta_info.empty else "?"
-                        d = m(linea["monto"], SIM) if linea["columna"] == "DEBE"  else ""
-                        h = m(linea["monto"], SIM) if linea["columna"] == "HABER" else ""
-                        filas += f"""<tr style="border-bottom:1px solid rgba(128,128,128,0.15)">
-                            <td style="padding:0.4rem 0.8rem">{linea['cuenta']} - {nombre_cta}</td>
-                            <td style="text-align:right;padding:0.4rem 0.8rem;color:#2563eb;font-weight:500">{d}</td>
-                            <td style="text-align:right;padding:0.4rem 0.8rem;color:#7c3aed;font-weight:500">{h}</td>
-                        </tr>"""
+                        st.markdown(f"**Asiento {i+1}: {asiento['glosa']}**")
+                        st.markdown(f"_{asiento['explicacion']}_")
 
-                    estado_color = "#d1fae5" if cuadra else "#fee2e2"
-                    estado_texto = "✅ El asiento cuadra" if cuadra else "⚠️ El asiento NO cuadra"
+                        filas = ""
+                        for linea in asiento["lineas"]:
+                            cuenta_info = cuentas_df[cuentas_df["codigo"] == linea["cuenta"]]
+                            nombre_cta  = cuenta_info["nombre"].iloc[0] if not cuenta_info.empty else "?"
+                            d = m(linea["monto"], SIM) if linea["columna"] == "DEBE"  else ""
+                            h = m(linea["monto"], SIM) if linea["columna"] == "HABER" else ""
+                            filas += f"""<tr style="border-bottom:1px solid rgba(128,128,128,0.15)">
+                                <td style="padding:0.4rem 0.8rem">{linea['cuenta']} - {nombre_cta}</td>
+                                <td style="text-align:right;padding:0.4rem 0.8rem;color:#2563eb;font-weight:500">{d}</td>
+                                <td style="text-align:right;padding:0.4rem 0.8rem;color:#7c3aed;font-weight:500">{h}</td>
+                            </tr>"""
 
-                    st.markdown(f"""
-                    <div class="card">
-                    <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
-                        <thead>
-                            <tr style="background:rgba(128,128,128,0.15)">
-                                <th style="text-align:left;padding:0.4rem 0.8rem">Cuenta</th>
-                                <th style="text-align:right;padding:0.4rem 0.8rem">DEBE</th>
-                                <th style="text-align:right;padding:0.4rem 0.8rem">HABER</th>
-                            </tr>
-                        </thead>
-                        <tbody>{filas}</tbody>
-                        <tfoot>
-                            <tr style="background:#1a1f36;font-weight:700">
-                                <td style="padding:0.4rem 0.8rem;color:white">TOTAL</td>
-                                <td style="text-align:right;padding:0.4rem 0.8rem;color:white">{m(total_debe, SIM)}</td>
-                                <td style="text-align:right;padding:0.4rem 0.8rem;color:white">{m(total_haber, SIM)}</td>
-                            </tr>
-                        </tfoot>
-                    </table>
-                    </div>
-                    <div style="background:{estado_color};padding:0.5rem 1rem;border-radius:6px;margin-top:0.5rem">{estado_texto}</div>
-                    """, unsafe_allow_html=True)
+                        estado_color = "#d1fae5" if cuadra else "#fee2e2"
+                        estado_texto = "✅ Cuadra" if cuadra else "⚠️ No cuadra"
 
-                    if cuadra and total_debe > 0:
-                        if st.button("✅ Registrar este asiento", key=f"reg_{len(st.session_state.chat_history)}"):
-                            num_nuevo = proximo_numero()
-                            asiento_id = execute(
-                                "INSERT INTO asientos (numero, fecha, glosa) VALUES (?,?,?)",
-                                (num_nuevo, date.today().strftime("%Y-%m-%d"), datos["glosa"])
-                            )
-                            data_lineas = [
-                                (asiento_id, l["cuenta"], l["monto"], l["columna"])
-                                for l in datos["lineas"] if l["monto"] > 0
-                            ]
-                            executemany("INSERT INTO lineas (asiento_id, cuenta, monto, columna) VALUES (?,?,?,?)", data_lineas)
-                            st.success(f"✅ Asiento N° {num_nuevo:03d} registrado correctamente.")
+                        st.markdown(f"""
+                        <div class="card">
+                        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+                            <thead>
+                                <tr style="background:rgba(128,128,128,0.15)">
+                                    <th style="text-align:left;padding:0.4rem 0.8rem">Cuenta</th>
+                                    <th style="text-align:right;padding:0.4rem 0.8rem">DEBE</th>
+                                    <th style="text-align:right;padding:0.4rem 0.8rem">HABER</th>
+                                </tr>
+                            </thead>
+                            <tbody>{filas}</tbody>
+                            <tfoot>
+                                <tr style="background:#1a1f36;font-weight:700">
+                                    <td style="padding:0.4rem 0.8rem;color:white">TOTAL</td>
+                                    <td style="text-align:right;padding:0.4rem 0.8rem;color:white">{m(total_debe, SIM)}</td>
+                                    <td style="text-align:right;padding:0.4rem 0.8rem;color:white">{m(total_haber, SIM)}</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                        </div>
+                        <div style="background:{estado_color};padding:0.5rem 1rem;border-radius:6px;margin-top:0.5rem;margin-bottom:1rem">{estado_texto}</div>
+                        """, unsafe_allow_html=True)
 
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": f"**{datos['glosa']}**\n\n{datos['explicacion']}"
-                })
+                        if cuadra and total_debe > 0:
+                            if st.button(f"✅ Registrar asiento {i+1}", key=f"reg_{len(st.session_state.chat_history)}_{i}"):
+                                num_nuevo = proximo_numero()
+                                asiento_id = execute(
+                                    "INSERT INTO asientos (numero, fecha, glosa) VALUES (?,?,?)",
+                                    (num_nuevo, date.today().strftime("%Y-%m-%d"), asiento["glosa"])
+                                )
+                                data_lineas = [
+                                    (asiento_id, l["cuenta"], l["monto"], l["columna"])
+                                    for l in asiento["lineas"] if l["monto"] > 0
+                                ]
+                                executemany("INSERT INTO lineas (asiento_id, cuenta, monto, columna) VALUES (?,?,?,?)", data_lineas)
+                                st.success(f"✅ Asiento N° {num_nuevo:03d} registrado.")
+
+                resumen = " / ".join(a["glosa"] for a in datos)
+                st.session_state.chat_history.append({"role": "assistant", "content": f"Asientos generados: {resumen}"})
 
             except (json.JSONDecodeError, KeyError):
-                # Es una consulta — mostrar respuesta en markdown
+                # Respuesta de texto (consulta de estados financieros)
                 with st.chat_message("assistant"):
                     st.markdown(respuesta_raw)
                 st.session_state.chat_history.append({"role": "assistant", "content": respuesta_raw})
