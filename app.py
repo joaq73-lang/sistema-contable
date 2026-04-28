@@ -930,7 +930,6 @@ elif pagina == "Libro Diario":
     if df.empty:
         st.info("No hay asientos en el periodo seleccionado.")
     else:
-    else:
         gran_debe = gran_haber = 0
         rows_html = ""
         for num_asiento in df["numero"].unique():
