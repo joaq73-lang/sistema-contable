@@ -1577,8 +1577,33 @@ Responde siempre en español. Si no queda claro si es consulta o registro, pregu
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
+    for idx, msg in enumerate(st.session_state.chat_history):
+    with st.chat_message(msg["role"]):
+        if "asientos_json" in msg:
+            for i, asiento in enumerate(msg["asientos_json"]):
+                total_debe  = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "DEBE")
+                total_haber = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "HABER")
+                cuadra = round(total_debe - total_haber, 2) == 0
+                st.markdown(f"**Asiento {i+1}: {asiento['glosa']}**")
+                # ... tu HTML de tabla aquí igual que antes ...
+                if cuadra and total_debe > 0:
+                    btn_key = f"reg_hist_{idx}_{i}"
+                    if st.button(f"✅ Registrar asiento {i+1}", key=btn_key):
+                        num_nuevo = proximo_numero()
+                        asiento_id = execute(
+                            "INSERT INTO asientos (numero, fecha, glosa) VALUES (?,?,?)",
+                            (num_nuevo, date.today().strftime("%Y-%m-%d"), asiento["glosa"])
+                        )
+                        data_lineas = [
+                            (asiento_id, l["cuenta"], l["monto"], l["columna"])
+                            for l in asiento["lineas"] if l["monto"] > 0
+                        ]
+                        executemany(
+                            "INSERT INTO lineas (asiento_id, cuenta, monto, columna) VALUES (?,?,?,?)",
+                            data_lineas
+                        )
+                        st.success(f"✅ Asiento N° {num_nuevo:03d} registrado.")
+        else:
             st.markdown(msg["content"])
 
     # ── Input ─────────────────────────────────────────────────────────────────
@@ -1696,8 +1721,11 @@ Responde siempre en español. Si no queda claro si es consulta o registro, pregu
                                 executemany("INSERT INTO lineas (asiento_id, cuenta, monto, columna) VALUES (?,?,?,?)", data_lineas)
                                 st.success(f"✅ Asiento N° {num_nuevo:03d} registrado.")
 
-                resumen = " / ".join(a["glosa"] for a in datos)
-                st.session_state.chat_history.append({"role": "assistant", "content": f"Asientos generados: {resumen}"})
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": f"Asientos generados: {' / '.join(a['glosa'] for a in datos)}",
+                    "asientos_json": datos  # <-- guardar el JSON completo
+                })
 
             except (json.JSONDecodeError, KeyError):
                 # Respuesta de texto (consulta de estados financieros)
