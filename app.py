@@ -1552,7 +1552,7 @@ Puedes hacer DOS cosas:
 
 1. CONSULTAS: Si el usuario pregunta por sus estados financieros o pide ver el libro diario, mayor, balance de comprobación, estado de resultados o estado de situación financiera, responde usando los datos reales de arriba. Muestra tablas en markdown bien formateadas con todos los registros completos, sin omitir ninguno.
 
-2. REGISTRO DE ASIENTOS: Si el usuario describe una operación contable (puede ser un texto largo con varias operaciones), interpreta CADA operación y genera UN JSON por cada asiento. Devuelve una lista JSON así:
+2. REGISTRO DE ASIENTOS: Si el usuario describe una operación contable (puede ser un texto largo con varias operaciones), interpreta CADA operación y genera UN JSON por cada asiento. Devuelve ÚNICAMENTE la lista JSON, sin ningún texto antes ni después, sin explicaciones fuera del JSON, sin notas al pie. Solo el JSON puro:
 [
   {{
     "glosa": "descripción breve",
@@ -1618,6 +1618,16 @@ Responde siempre en español. Si no queda claro si es consulta o registro, pregu
                     respuesta_limpia = respuesta_limpia.split("```")[1]
                     if respuesta_limpia.startswith("json"):
                         respuesta_limpia = respuesta_limpia[4:]
+                else:
+                    # Extraer solo la parte JSON aunque haya texto alrededor
+                    inicio = respuesta_limpia.find("[")
+                    if inicio == -1:
+                        inicio = respuesta_limpia.find("{")
+                    fin = respuesta_limpia.rfind("]")
+                    if fin == -1:
+                        fin = respuesta_limpia.rfind("}")
+                    if inicio != -1 and fin != -1:
+                        respuesta_limpia = respuesta_limpia[inicio:fin+1]
 
                 datos = json.loads(respuesta_limpia)
 
