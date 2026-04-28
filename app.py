@@ -1573,37 +1573,10 @@ Reglas para asientos:
 Responde siempre en español. Si no queda claro si es consulta o registro, pregunta al usuario.
 """
 
-    # ── Botones rápidos ───────────────────────────────────────────────────────
-    st.markdown("### Accesos rápidos")
-    col1, col2, col3, col4, col5 = st.columns(5)
-
+    # ── Historial ─────────────────────────────────────────────────────────────
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    with col1:
-        if st.button("📒 Libro Diario"):
-            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Libro Diario completo con todos los asientos"})
-            st.rerun()
-    with col2:
-        if st.button("📘 Libro Mayor"):
-            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Libro Mayor completo con saldos por cuenta"})
-            st.rerun()
-    with col3:
-        if st.button("⚖️ Bal. Comprobación"):
-            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Balance de Comprobación completo"})
-            st.rerun()
-    with col4:
-        if st.button("📊 Est. Resultados"):
-            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Estado de Resultados detallado"})
-            st.rerun()
-    with col5:
-        if st.button("🏦 Sit. Financiera"):
-            st.session_state.chat_history.append({"role": "user", "content": "Muéstrame el Estado de Situación Financiera completo"})
-            st.rerun()
-
-    st.markdown("---")
-
-    # ── Historial ─────────────────────────────────────────────────────────────
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
