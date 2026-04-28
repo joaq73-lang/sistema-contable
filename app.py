@@ -622,6 +622,7 @@ with st.sidebar:
         "Estado de Resultados",
         "Estado de Situación Financiera",
         "Plan de Cuentas",
+        "🤖 Asistente IA",
     ])
     st.markdown("---")
 
@@ -1439,3 +1440,181 @@ elif pagina == "Plan de Cuentas":
                     execute("INSERT INTO cuentas VALUES (?,?,?,?)", (nuevo_cod, nuevo_nom, nuevo_tipo, nuevo_nat))
                     st.success(f"✅ Cuenta {nuevo_cod} - {nuevo_nom} agregada.")
                     st.rerun()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ASISTENTE IA (GROQ)
+# ═══════════════════════════════════════════════════════════════════════════════
+elif pagina == "🤖 Asistente IA":
+    from groq import Groq
+
+    st.title("🤖 Asistente Contable IA")
+    st.markdown("Describe una operación en lenguaje natural y el asistente creará el asiento contable automáticamente.")
+
+    # Obtener cuentas disponibles para pasarlas al contexto
+    cuentas_df = query("SELECT codigo, nombre, tipo, naturaleza FROM cuentas ORDER BY codigo")
+    cuentas_contexto = "\n".join(
+        f"{r.codigo} - {r.nombre} ({r.tipo}, {r.naturaleza})"
+        for _, r in cuentas_df.iterrows()
+    )
+
+    SYSTEM_PROMPT = f"""Eres un asistente contable experto en el Plan Contable General Empresarial (PCGE) de Perú.
+El usuario te describirá operaciones en lenguaje natural y tú debes:
+1. Interpretar la operación
+2. Generar el asiento contable correspondiente SOLO usando las cuentas disponibles
+3. Devolver ÚNICAMENTE un JSON con este formato exacto, sin texto adicional:
+
+{{
+  "glosa": "descripción breve del asiento",
+  "lineas": [
+    {{"cuenta": "10", "monto": 1000.00, "columna": "DEBE"}},
+    {{"cuenta": "70", "monto": 1000.00, "columna": "HABER"}}
+  ],
+  "explicacion": "explicación breve de por qué se usa cada cuenta"
+}}
+
+Cuentas disponibles en esta empresa:
+{cuentas_contexto}
+
+Reglas:
+- El total DEBE siempre debe ser igual al total HABER
+- Solo usa cuentas de la lista anterior
+- Los montos deben ser números positivos
+- Si el usuario no menciona montos exactos, usa 0 y avísalo en la explicación
+- Si la operación no es clara, pide aclaración en lugar de generar el JSON
+"""
+
+    # Inicializar historial
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    # Mostrar historial
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # Input del usuario
+    user_input = st.chat_input("Ej: Vendemos mercadería por S/ 5000 al contado...")
+
+    if user_input:
+        # Mostrar mensaje del usuario
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+
+        # Llamar a Groq
+        try:
+            api_key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
+            if not api_key:
+                st.error("❌ No se encontró GROQ_API_KEY. Configúrala en los secrets de Streamlit.")
+                st.stop()
+
+            client = Groq(api_key=api_key)
+
+            messages_groq = [{"role": "system", "content": SYSTEM_PROMPT}]
+            for msg in st.session_state.chat_history:
+                messages_groq.append({"role": msg["role"], "content": msg["content"]})
+
+            with st.spinner("Analizando operación..."):
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=messages_groq,
+                    temperature=0.1,
+                    max_tokens=1000,
+                )
+
+            respuesta_raw = response.choices[0].message.content.strip()
+
+            # Intentar parsear como JSON
+            try:
+                # Limpiar posibles ```json ... ```
+                respuesta_limpia = respuesta_raw
+                if "```" in respuesta_limpia:
+                    respuesta_limpia = respuesta_limpia.split("```")[1]
+                    if respuesta_limpia.startswith("json"):
+                        respuesta_limpia = respuesta_limpia[4:]
+
+                datos = json.loads(respuesta_limpia)
+
+                # Validar que cuadra
+                total_debe  = sum(l["monto"] for l in datos["lineas"] if l["columna"] == "DEBE")
+                total_haber = sum(l["monto"] for l in datos["lineas"] if l["columna"] == "HABER")
+                cuadra = round(total_debe - total_haber, 2) == 0
+
+                # Mostrar respuesta del asistente
+                with st.chat_message("assistant"):
+                    st.markdown(f"**Asiento sugerido:** {datos['glosa']}")
+                    st.markdown(f"_{datos['explicacion']}_")
+
+                    # Tabla del asiento
+                    filas = ""
+                    for linea in datos["lineas"]:
+                        cuenta_info = cuentas_df[cuentas_df["codigo"] == linea["cuenta"]]
+                        nombre_cta  = cuenta_info["nombre"].iloc[0] if not cuenta_info.empty else "?"
+                        d = m(linea["monto"], SIM) if linea["columna"] == "DEBE"  else ""
+                        h = m(linea["monto"], SIM) if linea["columna"] == "HABER" else ""
+                        filas += f"""<tr style="border-bottom:1px solid rgba(128,128,128,0.15)">
+                            <td style="padding:0.4rem 0.8rem">{linea['cuenta']} - {nombre_cta}</td>
+                            <td style="text-align:right; padding:0.4rem 0.8rem; color:#2563eb; font-weight:500">{d}</td>
+                            <td style="text-align:right; padding:0.4rem 0.8rem; color:#7c3aed; font-weight:500">{h}</td>
+                        </tr>"""
+
+                    estado_color = "#d1fae5" if cuadra else "#fee2e2"
+                    estado_texto = "✅ El asiento cuadra" if cuadra else "⚠️ El asiento NO cuadra"
+
+                    st.markdown(f"""
+                    <div class="card">
+                    <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+                        <thead>
+                            <tr style="background:rgba(128,128,128,0.15)">
+                                <th style="text-align:left; padding:0.4rem 0.8rem">Cuenta</th>
+                                <th style="text-align:right; padding:0.4rem 0.8rem">DEBE</th>
+                                <th style="text-align:right; padding:0.4rem 0.8rem">HABER</th>
+                            </tr>
+                        </thead>
+                        <tbody>{filas}</tbody>
+                        <tfoot>
+                            <tr style="background:#1a1f36; font-weight:700">
+                                <td style="padding:0.4rem 0.8rem; color:white">TOTAL</td>
+                                <td style="text-align:right; padding:0.4rem 0.8rem; color:white">{m(total_debe, SIM)}</td>
+                                <td style="text-align:right; padding:0.4rem 0.8rem; color:white">{m(total_haber, SIM)}</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                    </div>
+                    <div style="background:{estado_color}; padding:0.5rem 1rem; border-radius:6px; margin-top:0.5rem">{estado_texto}</div>
+                    """, unsafe_allow_html=True)
+
+                    # Botón para registrar directamente
+                    if cuadra and total_debe > 0:
+                        if st.button("✅ Registrar este asiento", key=f"registrar_{len(st.session_state.chat_history)}"):
+                            num_nuevo = proximo_numero()
+                            asiento_id = execute(
+                                "INSERT INTO asientos (numero, fecha, glosa) VALUES (?,?,?)",
+                                (num_nuevo, date.today().strftime("%Y-%m-%d"), datos["glosa"])
+                            )
+                            data_lineas = [
+                                (asiento_id, l["cuenta"], l["monto"], l["columna"])
+                                for l in datos["lineas"] if l["monto"] > 0
+                            ]
+                            executemany("INSERT INTO lineas (asiento_id, cuenta, monto, columna) VALUES (?,?,?,?)", data_lineas)
+                            st.success(f"✅ Asiento N° {num_nuevo:03d} registrado correctamente.")
+
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": f"**{datos['glosa']}**\n\n{datos['explicacion']}"
+                })
+
+            except json.JSONDecodeError:
+                # El modelo respondió con texto normal (pidiendo aclaración, etc.)
+                with st.chat_message("assistant"):
+                    st.markdown(respuesta_raw)
+                st.session_state.chat_history.append({"role": "assistant", "content": respuesta_raw})
+
+        except Exception as e:
+            st.error(f"Error al conectar con Groq: {e}")
+
+    # Limpiar conversación
+    if st.session_state.chat_history:
+        if st.button("🗑 Limpiar conversación"):
+            st.session_state.chat_history = []
+            st.rerun()
