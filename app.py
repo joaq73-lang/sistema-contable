@@ -1578,33 +1578,33 @@ Responde siempre en español. Si no queda claro si es consulta o registro, pregu
         st.session_state.chat_history = []
 
     for idx, msg in enumerate(st.session_state.chat_history):
-    with st.chat_message(msg["role"]):
-        if "asientos_json" in msg:
-            for i, asiento in enumerate(msg["asientos_json"]):
-                total_debe  = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "DEBE")
-                total_haber = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "HABER")
-                cuadra = round(total_debe - total_haber, 2) == 0
-                st.markdown(f"**Asiento {i+1}: {asiento['glosa']}**")
-                # ... tu HTML de tabla aquí igual que antes ...
-                if cuadra and total_debe > 0:
-                    btn_key = f"reg_hist_{idx}_{i}"
-                    if st.button(f"✅ Registrar asiento {i+1}", key=btn_key):
-                        num_nuevo = proximo_numero()
-                        asiento_id = execute(
-                            "INSERT INTO asientos (numero, fecha, glosa) VALUES (?,?,?)",
-                            (num_nuevo, date.today().strftime("%Y-%m-%d"), asiento["glosa"])
-                        )
-                        data_lineas = [
-                            (asiento_id, l["cuenta"], l["monto"], l["columna"])
-                            for l in asiento["lineas"] if l["monto"] > 0
-                        ]
-                        executemany(
-                            "INSERT INTO lineas (asiento_id, cuenta, monto, columna) VALUES (?,?,?,?)",
-                            data_lineas
-                        )
-                        st.success(f"✅ Asiento N° {num_nuevo:03d} registrado.")
-        else:
-            st.markdown(msg["content"])
+        with st.chat_message(msg["role"]):
+            if "asientos_json" in msg:
+                for i, asiento in enumerate(msg["asientos_json"]):
+                    total_debe  = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "DEBE")
+                    total_haber = sum(l["monto"] for l in asiento["lineas"] if l["columna"] == "HABER")
+                    cuadra = round(total_debe - total_haber, 2) == 0
+                    st.markdown(f"**Asiento {i+1}: {asiento['glosa']}**")
+                    # ... tu HTML de tabla aquí igual que antes ...
+                    if cuadra and total_debe > 0:
+                        btn_key = f"reg_hist_{idx}_{i}"
+                        if st.button(f"✅ Registrar asiento {i+1}", key=btn_key):
+                            num_nuevo = proximo_numero()
+                            asiento_id = execute(
+                                "INSERT INTO asientos (numero, fecha, glosa) VALUES (?,?,?)",
+                                (num_nuevo, date.today().strftime("%Y-%m-%d"), asiento["glosa"])
+                            )
+                            data_lineas = [
+                                (asiento_id, l["cuenta"], l["monto"], l["columna"])
+                                for l in asiento["lineas"] if l["monto"] > 0
+                            ]
+                            executemany(
+                                "INSERT INTO lineas (asiento_id, cuenta, monto, columna) VALUES (?,?,?,?)",
+                                data_lineas
+                            )
+                            st.success(f"✅ Asiento N° {num_nuevo:03d} registrado.")
+            else:
+                st.markdown(msg["content"])
 
     # ── Input ─────────────────────────────────────────────────────────────────
     user_input = st.chat_input("Ej: El 01/01 vendimos mercadería por S/5000 al contado y compramos útiles por S/200...")
