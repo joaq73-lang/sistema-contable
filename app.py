@@ -289,6 +289,7 @@ def pantalla_bienvenida():
                             JOIN cuentas c ON c.codigo = l.cuenta
                             ORDER BY a.numero, l.columna DESC
                         """, conn_exp)
+                    
 
                         # ── Libro Mayor ───────────────────────────────────
                         df_mayor = pd.read_sql_query("""
