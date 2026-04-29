@@ -546,6 +546,18 @@ def proximo_numero():
     n = df["n"].iloc[0]
     return 1 if pd.isna(n) else int(n) + 1
 
+def rango_fechas_asientos():
+    df = query("SELECT MIN(fecha) as f_min, MAX(fecha) as f_max FROM asientos")
+    f_min = df["f_min"].iloc[0]
+    f_max = df["f_max"].iloc[0]
+    if f_min is None:  # No hay asientos aún
+        hoy = date.today()
+        return date(hoy.year, 1, 1), hoy
+    return (
+        datetime.strptime(f_min, "%Y-%m-%d").date(),
+        datetime.strptime(f_max, "%Y-%m-%d").date(),
+    )
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ROUTER PRINCIPAL
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -912,11 +924,12 @@ elif pagina == "Editar / Eliminar Asientos":
 elif pagina == "Libro Diario":
     st.title("Libro Diario")
 
+    f_ini_default, f_fin_default = rango_fechas_asientos()
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        fecha_ini = st.date_input("Desde", value=date(date.today().year, 1, 1))
+        fecha_ini = st.date_input("Desde", value=f_ini_default)
     with col_f2:
-        fecha_fin = st.date_input("Hasta", value=date.today())
+        fecha_fin = st.date_input("Hasta", value=f_fin_default)
 
     df = query("""
         SELECT a.numero, a.fecha, a.glosa, c.codigo, c.nombre, l.columna, l.monto
@@ -988,11 +1001,12 @@ elif pagina == "Libro Diario":
 elif pagina == "Libro Mayor":
     st.title("Libro Mayor")
 
+    f_ini_default, f_fin_default = rango_fechas_asientos()
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        fecha_ini = st.date_input("Desde", value=date(date.today().year, 1, 1))
+        fecha_ini = st.date_input("Desde", value=f_ini_default)
     with col_f2:
-        fecha_fin = st.date_input("Hasta", value=date.today())
+        fecha_fin = st.date_input("Hasta", value=f_fin_default)
 
     cuentas_mov = query("""
         SELECT DISTINCT l.cuenta, c.nombre, c.tipo, c.naturaleza
@@ -1096,11 +1110,12 @@ elif pagina == "Libro Mayor":
 elif pagina == "Balance de Comprobación":
     st.title("Balance de Comprobación")
 
+    f_ini_default, f_fin_default = rango_fechas_asientos()
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        fecha_ini = st.date_input("Desde", value=date(date.today().year, 1, 1))
+        fecha_ini = st.date_input("Desde", value=f_ini_default)
     with col_f2:
-        fecha_fin = st.date_input("Hasta", value=date.today())
+        fecha_fin = st.date_input("Hasta", value=f_fin_default)
 
     df = query("""
         SELECT c.codigo, c.nombre, c.tipo, c.naturaleza,
@@ -1199,11 +1214,12 @@ elif pagina == "Balance de Comprobación":
 elif pagina == "Estado de Resultados":
     st.title("Estado de Resultados")
 
+    f_ini_default, f_fin_default = rango_fechas_asientos()
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        fecha_ini = st.date_input("Desde", value=date(date.today().year, 1, 1))
+        fecha_ini = st.date_input("Desde", value=f_ini_default)
     with col_f2:
-        fecha_fin = st.date_input("Hasta", value=date.today())
+        fecha_fin = st.date_input("Hasta", value=f_fin_default)
 
     df = query("""
         SELECT c.codigo, c.nombre, c.tipo, c.naturaleza,
@@ -1323,7 +1339,8 @@ elif pagina == "Estado de Resultados":
 elif pagina == "Estado de Situación Financiera":
     st.title("Estado de Situación Financiera")
 
-    fecha_corte = st.date_input("Fecha de corte", value=date.today())
+    _, f_corte_default = rango_fechas_asientos()
+    fecha_corte = st.date_input("Fecha de corte", value=f_corte_default)
 
     df = query("""
         SELECT c.codigo, c.nombre, c.tipo, c.naturaleza,
