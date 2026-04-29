@@ -1344,7 +1344,11 @@ elif pagina == "Estado de Situación Financiera":
             if row["naturaleza"] == "DEUDORA":
                 return row["suma_debe"] - row["suma_haber"]
             else:
-                return row["suma_haber"] - row["suma_debe"]
+                s = row["suma_haber"] - row["suma_debe"]
+                # Si es ACTIVO con naturaleza ACREEDORA (ej: depreciación), invertir signo
+                if row["tipo"] == "ACTIVO":
+                    return -s
+                return s
 
         df["saldo"] = df.apply(saldo_cuenta, axis=1)
 
